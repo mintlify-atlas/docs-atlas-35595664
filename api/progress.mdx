@@ -1,0 +1,260 @@
+---
+title: "Progress tracking endpoints — lectures and courses"
+description: "Track per-lecture completion for enrolled students, mark individual lectures watched or unwatched, complete an entire course at once, or reset all progress."
+---
+
+The progress tracking system records which lectures a student has completed within a course and computes an overall `completionPercentage` automatically. Each `CourseProgress` document is keyed by both a `user` and a `course` ObjectId, so every student has their own independent progress record per course. The `completionPercentage` and `isCompleted` fields are recalculated on every save via a pre-save hook — you never need to compute them yourself.
+
+<Info>
+  All progress endpoints are prefixed with `/api/v1/progress`. All four endpoints require authentication via the HTTP-only `token` cookie.
+</Info>
+
+---
+
+## GET /api/v1/progress/:courseId
+
+Retrieve the authenticated user's progress record for a specific course. The response includes the populated course metadata and user info, as well as the per-lecture completion breakdown.
+
+**Auth required:** Yes
+
+### Path parameters
+
+<ParamField path="courseId" type="string" required>
+  MongoDB ObjectId of the course whose progress you want to retrieve.
+</ParamField>
+
+### Response — 200
+
+<ResponseField name="status" type="string">
+  `"success"`
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  <Expandable title="data properties">
+    <ResponseField name="courseProgress" type="object">
+      The full progress document.
+
+      <Expandable title="courseProgress fields">
+        <ResponseField name="_id" type="string">MongoDB document ID of the progress record.</ResponseField>
+        <ResponseField name="user" type="object">Populated user with `_id`, `name`, and `email`.</ResponseField>
+        <ResponseField name="course" type="object">Populated course with `_id`, `title`, and `description`.</ResponseField>
+        <ResponseField name="isCompleted" type="boolean">
+          `true` when `completionPercentage` reaches 100. Computed automatically.
+        </ResponseField>
+        <ResponseField name="completionPercentage" type="number">
+          Percentage of lectures marked as completed. Range: `0` – `100`. Computed on every save.
+        </ResponseField>
+        <ResponseField name="lectureProgress" type="array">
+          Per-lecture progress entries.
+
+          <Expandable title="lecture progress entry">
+            <ResponseField name="lecture" type="string">ObjectId of the lecture.</ResponseField>
+            <ResponseField name="isCompleted" type="boolean">Whether this lecture has been marked completed.</ResponseField>
+            <ResponseField name="watchTime" type="number">Seconds watched (currently tracked as `0` unless updated by a client).</ResponseField>
+            <ResponseField name="lastWatched" type="string">ISO 8601 timestamp of the last watched event.</ResponseField>
+          </Expandable>
+        </ResponseField>
+        <ResponseField name="lastAccessed" type="string">ISO 8601 timestamp of the most recent access.</ResponseField>
+        <ResponseField name="createdAt" type="string">ISO 8601 creation timestamp.</ResponseField>
+        <ResponseField name="updatedAt" type="string">ISO 8601 last-update timestamp.</ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request GET \
+  --url http://localhost:4000/api/v1/progress/64f1a2b3c4d5e6f7a8b9c0d1 \
+  --cookie cookies.txt
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `courseId` is missing |
+| `401` | Missing or invalid auth cookie |
+| `404` | Course not found |
+| `404` | No progress record found for this user and course |
+
+---
+
+## PATCH /api/v1/progress/:courseId/lectures/:lectureId
+
+Mark a single lecture as completed or uncompleted. If no progress record exists for the user/course pair yet, the server creates one initialised with all lectures set to `isCompleted: false` and returns it immediately without applying the `isCompleted` update from the request body. On subsequent calls the specific lecture's status is updated and `completionPercentage` is recalculated.
+
+**Auth required:** Yes
+
+### Path parameters
+
+<ParamField path="courseId" type="string" required>
+  MongoDB ObjectId of the parent course.
+</ParamField>
+
+<ParamField path="lectureId" type="string" required>
+  MongoDB ObjectId of the lecture to update.
+</ParamField>
+
+### Request body
+
+<ParamField body="isCompleted" type="boolean" required>
+  Pass `true` to mark the lecture completed, `false` to mark it incomplete.
+</ParamField>
+
+### Response — 200
+
+<ResponseField name="status" type="string">
+  `"success"`
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  <Expandable title="data properties">
+    <ResponseField name="courseProgress" type="object">
+      The updated `CourseProgress` document with recalculated `completionPercentage` and `isCompleted`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL — mark lecture completed
+curl --request PATCH \
+  --url http://localhost:4000/api/v1/progress/64f1a2b3c4d5e6f7a8b9c0d1/lectures/65a1b2c3d4e5f6a7b8c9d0e1 \
+  --cookie cookies.txt \
+  --header 'Content-Type: application/json' \
+  --data '{"isCompleted": true}'
+```
+
+```bash cURL — mark lecture incomplete
+curl --request PATCH \
+  --url http://localhost:4000/api/v1/progress/64f1a2b3c4d5e6f7a8b9c0d1/lectures/65a1b2c3d4e5f6a7b8c9d0e1 \
+  --cookie cookies.txt \
+  --header 'Content-Type: application/json' \
+  --data '{"isCompleted": false}'
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `courseId` or `lectureId` is missing |
+| `400` | The specified lecture does not belong to this course |
+| `401` | Missing or invalid auth cookie |
+
+---
+
+## POST /api/v1/progress/:courseId/complete
+
+Mark every lecture in the course as completed in one operation, setting `isCompleted: true` on all lecture progress entries and the top-level `isCompleted` flag to `true`. The `completionPercentage` is saved as `100` after the pre-save hook runs.
+
+**Auth required:** Yes
+
+### Path parameters
+
+<ParamField path="courseId" type="string" required>
+  MongoDB ObjectId of the course to mark as fully completed.
+</ParamField>
+
+### Request body
+
+No request body is required.
+
+### Response — 200
+
+<ResponseField name="status" type="string">
+  `"success"`
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Course marked as completed"`
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  <Expandable title="data properties">
+    <ResponseField name="courseProgress" type="object">
+      The updated progress document with all lectures and the top-level `isCompleted` set to `true` and `completionPercentage` at `100`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:4000/api/v1/progress/64f1a2b3c4d5e6f7a8b9c0d1/complete \
+  --cookie cookies.txt
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `courseId` is missing |
+| `401` | Missing or invalid auth cookie |
+| `404` | No progress record found for this user and course |
+
+---
+
+## POST /api/v1/progress/:courseId/reset
+
+Reset all lecture progress for a course to its initial state. Every lecture entry's `isCompleted` is set to `false`, `lastWatched` is cleared to `null`, and the top-level `isCompleted` is set to `false`. The `completionPercentage` is recomputed to `0` by the pre-save hook.
+
+**Auth required:** Yes
+
+### Path parameters
+
+<ParamField path="courseId" type="string" required>
+  MongoDB ObjectId of the course whose progress should be reset.
+</ParamField>
+
+### Request body
+
+No request body is required.
+
+### Response — 200
+
+<ResponseField name="status" type="string">
+  `"success"`
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Course progress has been reset"`
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  <Expandable title="data properties">
+    <ResponseField name="courseProgress" type="object">
+      The reset progress document with `isCompleted: false`, `completionPercentage: 0`, and all lecture entries set to `isCompleted: false`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:4000/api/v1/progress/64f1a2b3c4d5e6f7a8b9c0d1/reset \
+  --cookie cookies.txt
+```
+
+</CodeGroup>
+
+<Warning>
+  Resetting progress clears all lecture completion data for this course. The action is saved immediately and cannot be undone.
+</Warning>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `courseId` is missing |
+| `401` | Missing or invalid auth cookie |
+| `404` | No progress record found for this user and course |

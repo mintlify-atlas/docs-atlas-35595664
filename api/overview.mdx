@@ -1,0 +1,131 @@
+---
+title: "LMS Backend REST API reference overview"
+description: "Base URL, authentication, rate limits, request and response conventions, and a map of all available resource endpoints for the LMS Backend REST API."
+---
+
+The LMS Backend exposes a versioned REST API over HTTP. Every endpoint lives under the `/api/v1` prefix, accepts JSON request bodies, and returns JSON responses with a consistent structure. Before you call any protected endpoint, you need a valid session cookie obtained by signing in — the API does not use bearer tokens in headers.
+
+## Base URL
+
+All requests must be sent to the following base URL. The port is controlled by the `PORT` environment variable on the server; the default used in development is `4000`.
+
+```
+http://localhost:4000/api/v1
+```
+
+<Note>
+  In production, replace `http://localhost:4000` with your deployed server's origin. The `/api/v1` prefix is always required.
+</Note>
+
+## Authentication
+
+The API uses JWT-based authentication. The token is issued as an **HTTP-only cookie** named `token` when you sign in. You do not need to read or manage the token manually — your HTTP client must simply send cookies with every request.
+
+```bash
+# The token cookie is set automatically on sign-in.
+# On subsequent requests, pass credentials: true (fetch) or --cookie-jar (curl).
+curl http://localhost:4000/api/v1/user/profile \
+  --cookie "token=<your_jwt_token>"
+```
+
+<Info>
+  The cookie is HTTP-only, so it cannot be read by JavaScript running in the browser. This protects the token from XSS attacks.
+</Info>
+
+Protected routes use the `isAuthenticated` middleware, which reads `req.cookies.token` and rejects the request with `401` if the cookie is absent or the token is invalid. See [Authentication concepts](/concepts/authentication) for a full explanation of the sign-in flow.
+
+## CORS
+
+The server only accepts cross-origin requests from the origin configured in the `CLIENT_URL` environment variable (defaults to `http://localhost:5173`). Requests from any other origin will be blocked by the browser before they reach the API.
+
+The following HTTP methods are permitted: `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`, `OPTIONS`.
+
+<Warning>
+  If you are calling the API from a browser-based app hosted at a different origin, you must set `CLIENT_URL` on the server to match your frontend's origin exactly — including scheme, host, and port.
+</Warning>
+
+## Rate limiting
+
+All `/api/*` routes are protected by a global rate limiter.
+
+| Window | Limit per IP |
+| ------ | ------------ |
+| 15 minutes | 100 requests |
+
+Exceeding the limit returns an HTTP `429` response with the message:
+
+```
+Too many request from this IP, please try later
+```
+
+## Request format
+
+Send all request bodies as JSON with the `Content-Type: application/json` header. The server enforces a **10 KB** maximum body size.
+
+```bash
+curl -X POST http://localhost:4000/api/v1/user/signup \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Ada Lovelace", "email": "ada@example.com", "password": "hunter2"}'
+```
+
+<Note>
+  The `POST /api/v1/payments/webhook` endpoint is the sole exception — it requires a raw binary body (`application/json` without JSON parsing) because Stripe signs the raw bytes for webhook verification.
+</Note>
+
+## Response format
+
+Every response — success or error — is a JSON object. Successful responses follow this shape:
+
+```json
+{
+  "status": "success",
+  "message": "...",
+  "data": { ... }
+}
+```
+
+Error responses use `"status": "error"` for `5xx` codes and `"status": "fail"` for `4xx` codes. See [Error responses](/api/errors) for the full error schema and a list of all status codes.
+
+## Available endpoints
+
+<CardGroup cols={2}>
+  <Card title="Health" icon="heart-pulse" href="/api/health">
+    `GET /api/v1/healthcheck` — Verify the server and database are reachable.
+  </Card>
+  <Card title="Users" icon="user" href="/api/users">
+    `/api/v1/user/*` — Sign up, sign in, profile management, password reset, and account deletion.
+  </Card>
+  <Card title="Courses" icon="book" href="/api/courses">
+    `/api/v1/courses/*` — Create, search, publish, and manage courses with thumbnail uploads.
+  </Card>
+  <Card title="Progress" icon="chart-line" href="/api/progress">
+    `/api/v1/progress/*` — Track per-lecture completion and mark courses as fully completed.
+  </Card>
+  <Card title="Payments" icon="credit-card" href="/api/payments">
+    `/api/v1/payments/*` — Stripe Checkout sessions, webhooks, and purchase status queries.
+  </Card>
+</CardGroup>
+
+## Example: authenticated request
+
+The following curl command logs in and captures the session cookie to disk, then uses that cookie to fetch the authenticated user's profile. This pattern works for any protected endpoint.
+
+<CodeGroup>
+
+```bash sign in and save cookie
+curl -X POST http://localhost:4000/api/v1/user/signin \
+  -H "Content-Type: application/json" \
+  -c cookies.txt \
+  -d '{"email": "ada@example.com", "password": "hunter2"}'
+```
+
+```bash call a protected endpoint
+curl http://localhost:4000/api/v1/user/profile \
+  -b cookies.txt
+```
+
+</CodeGroup>
+
+<Tip>
+  When using a browser-based client such as `fetch`, pass `credentials: "include"` so the browser automatically attaches the `token` cookie on every request.
+</Tip>

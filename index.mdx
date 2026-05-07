@@ -1,133 +1,67 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
-icon: 'star'
+title: "LMS Backend: Secure Node.js API for Learning Platforms"
+description: "A modular Express/MongoDB backend for LMS apps — covers user auth, course and lecture management, student progress tracking, and Stripe/Razorpay payments."
 ---
 
-## Setting up
+The LMS Backend is a production-ready REST API built with Node.js, Express, and MongoDB. It provides all the server-side functionality needed for a learning management system — from user registration and JWT authentication to course creation, video lecture uploads via Cloudinary, student progress tracking, and integrated Stripe/Razorpay payment processing.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the server locally in under five minutes with a step-by-step setup guide.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Environment Setup" icon="gear" href="/environment-setup">
+    Configure all required environment variables for auth, database, and payments.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore every endpoint with request/response schemas and curl examples.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Authentication" icon="lock" href="/concepts/authentication">
+    Learn how JWT cookie-based auth works and how to call protected endpoints.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What this API provides
 
-Everything you need to create world-class documentation.
+The LMS Backend is organized around five core resource domains, each with its own set of RESTful endpoints:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Users & Auth" icon="user" href="/api/users">
+    Sign up, sign in, profile management, password reset, and account deletion.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Courses" icon="book" href="/api/courses">
+    Create, search, publish, and manage courses with thumbnail uploads.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Lectures" icon="video" href="/api/lectures">
+    Add video lectures to courses with Cloudinary-backed streaming URLs.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Progress Tracking" icon="chart-line" href="/api/progress">
+    Track per-lecture completion and mark courses as fully completed.
   </Card>
-</Columns>
+  <Card title="Payments" icon="credit-card" href="/api/payments">
+    Stripe Checkout sessions, webhooks, and purchase status queries.
+  </Card>
+  <Card title="Security" icon="shield" href="/concepts/security">
+    Rate limiting, Helmet headers, HPP, and Mongo sanitization built in.
+  </Card>
+</CardGroup>
 
-## Make your content agent ready
+## Getting started
 
-Make your docs work for humans and AI agents alike.
+<Steps>
+  <Step title="Clone and install">
+    Clone the repository and install dependencies with `npm install`.
+  </Step>
+  <Step title="Configure environment">
+    Create a `.env` file with your MongoDB URI, JWT secret, Stripe keys, and Cloudinary credentials. See [Environment Setup](/environment-setup) for the full list.
+  </Step>
+  <Step title="Start the server">
+    Run `npm run dev` to start the server on port 4000 with hot reload via nodemon.
+  </Step>
+  <Step title="Call your first endpoint">
+    Hit `GET /api/v1/healthcheck` to confirm the server is running, then register a user with `POST /api/v1/user/signup`.
+  </Step>
+</Steps>
 
-<Columns cols={2}>
-  <Card
-    title="Prompt component"
-    icon="robot"
-    href="/agent-ready/prompt"
-  >
-    Embed shareable AI prompts readers can copy or open in Cursor.
-  </Card>
-  <Card
-    title="Visibility"
-    icon="eye"
-    href="/agent-ready/visibility"
-  >
-    Show different content to humans and agents reading your docs.
-  </Card>
-  <Card
-    title="Contextual menu"
-    icon="bolt"
-    href="/agent-ready/contextual"
-  >
-    Give readers one-click access to Claude, ChatGPT, Cursor, and more.
-  </Card>
-  <Card
-    title="AI coding tools"
-    icon="wand-magic-sparkles"
-    href="/ai-tools/claude-code"
-  >
-    Set up Claude Code, Cursor, or Windsurf with Mintlify's skill.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+  The server runs at `http://localhost:4000` by default. All API routes are prefixed with `/api/v1`.
+</Note>

@@ -1,0 +1,109 @@
+---
+title: "User roles and permissions in LMS Backend"
+description: "Understand the three user roles in the LMS Backend — student, instructor, and admin — what each role can do, and how role is assigned and enforced."
+---
+
+Every user account in the LMS Backend carries a `role` field that controls which actions they can take. The role is stored on the User document and is verified at the controller level — endpoints check `req.id` against resource ownership or rely on the role value to gate access. There are three roles: `student`, `instructor`, and `admin`.
+
+## Role assignment
+
+The `role` field is defined in the user schema with an explicit allow-list and a default of `'student'`:
+
+```javascript models/user.model.js
+role: {
+    type: String,
+    enum: {
+        values: ['student', 'instructor', 'admin'],
+        message: 'Please select a valid role'
+    },
+    default: 'student',
+},
+```
+
+When a new account is created via `POST /api/v1/user/signup`, the request body may include a `role` field. If omitted, the account is created as a `student`:
+
+```javascript controllers/user.controller.js
+const { name, email, password, role = 'student' } = req.body;
+```
+
+<Note>
+  Role is set at account creation time. There is no public endpoint to change your own role after sign-up. Role escalation requires direct database access or an admin-level operation.
+</Note>
+
+## Role capabilities
+
+<AccordionGroup>
+  <Accordion title="student — default role">
+    Students are the primary consumers of course content. After creating an account and signing in they can:
+
+    | Action | Endpoint |
+    |--------|----------|
+    | View published courses | `GET /api/v1/courses/published` |
+    | Search courses by keyword | `GET /api/v1/courses/search` |
+    | View course details and lecture list | `GET /api/v1/courses/:courseId` |
+    | Purchase a course via Stripe | `POST /api/v1/payments/create-checkout-session` |
+    | List all purchased courses | `GET /api/v1/payments/purchased-courses` |
+    | Check purchase status for a course | `GET /api/v1/payments/courses/:courseId/purchase-status` |
+    | Track lecture-level progress | `PATCH /api/v1/progress/:courseId/lectures/:lectureId` |
+    | Mark a course as completed | `POST /api/v1/progress/:courseId/complete` |
+    | Reset progress on a course | `POST /api/v1/progress/:courseId/reset` |
+    | Manage their own profile and avatar | `GET / PATCH /api/v1/user/profile` |
+
+    Enrolled courses are stored on the user document as an array of `{ course, enrolledAt }` objects. The virtual field `totalEnrolledCourses` returns the count.
+  </Accordion>
+  <Accordion title="instructor — course creators">
+    Instructors have all student capabilities plus the ability to create and manage courses. Authorization at the controller level verifies that the requesting user (`req.id`) matches the `course.instructor` field before allowing mutations.
+
+    | Action | Endpoint |
+    |--------|----------|
+    | Create a new course (with thumbnail) | `POST /api/v1/courses` |
+    | List courses they have created | `GET /api/v1/courses/my-courses` |
+    | Update course details or thumbnail | `PATCH /api/v1/courses/:courseId` |
+    | Add a lecture with video to a course | `POST /api/v1/courses/:courseId/lectures` |
+
+    Created courses are tracked on the user document in a `createdCourses` array of Course ObjectIds.
+
+    <Warning>
+      Calling `POST /api/v1/courses` or `POST /api/v1/courses/:courseId/lectures` as a `student` will not automatically fail at the middleware layer — authorization is enforced inside the controller by comparing `req.id` to `course.instructor`. Attempting to modify a course you did not create returns an error.
+    </Warning>
+  </Accordion>
+  <Accordion title="admin — platform management">
+    The `admin` role is defined in the schema and is a valid value that can be assigned to a user. Admin-specific route middleware is not present in the current public route definitions — admin operations are distinguished by the `role` value on the user document and can be used by controllers to gate privileged actions.
+
+    <Info>
+      If you are building admin tooling, check the `role` field on the authenticated user's document (`User.findById(req.id)`) and return a 403 if the role is not `'admin'`.
+    </Info>
+  </Accordion>
+</AccordionGroup>
+
+## Role comparison table
+
+| Capability | student | instructor | admin |
+|---|:---:|:---:|:---:|
+| Browse & search published courses | Yes | Yes | Yes |
+| Purchase courses via Stripe | Yes | Yes | Yes |
+| Track and reset course progress | Yes | Yes | Yes |
+| Manage own profile and avatar | Yes | Yes | Yes |
+| Forgot / reset password | Yes | Yes | Yes |
+| Create new courses | No | Yes | Yes |
+| Add lectures to own courses | No | Yes | Yes |
+| Update own course details | No | Yes | Yes |
+| List own created courses | No | Yes | Yes |
+| Platform-level admin operations | No | No | Yes |
+
+## User document fields related to roles
+
+The user schema stores role-relevant data that is returned on `GET /api/v1/user/profile`:
+
+```javascript models/user.model.js
+enrolledCourses: [{
+    course: { type: mongoose.Schema.Types.ObjectId, ref: 'Course' },
+    enrolledAt: { type: Date, default: Date.now }
+}],
+createdCourses: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Course'
+}],
+```
+
+`enrolledCourses` is populated with `title`, `thumbnail`, and `description` when you fetch your profile, so a single request gives you the full list of courses a student is enrolled in.

@@ -1,0 +1,192 @@
+---
+title: "Accept payments with Stripe Checkout"
+description: "Walk through the full Stripe Checkout flow: create a session, redirect the user to pay, and confirm the purchase via webhook when payment succeeds."
+---
+
+The LMS backend delegates payment collection to Stripe Checkout. Your client never handles raw card data — it receives a Stripe-hosted session URL, redirects the user there, and waits for the server to confirm the outcome through a webhook. This page covers every step a client needs to implement that flow correctly.
+
+## Environment variables
+
+Before making any payment calls, ensure these variables are set on the server:
+
+| Variable | Purpose |
+|---|---|
+| `STRIPE_SECRET_KEY` | Authenticates all Stripe API requests |
+| `STRIPE_WEBHOOK_SECRET` | Validates the signature on every incoming webhook event |
+| `STRIPE_SUCCESS_URL` | Where Stripe redirects after successful payment (defaults to `http://localhost:5173/payment/success?session_id={CHECKOUT_SESSION_ID}`) |
+| `STRIPE_CANCEL_URL` | Where Stripe redirects when the user cancels (defaults to `http://localhost:5173/payment/cancel`) |
+
+<Warning>
+Never expose `STRIPE_SECRET_KEY` or `STRIPE_WEBHOOK_SECRET` to the browser. Both are server-only secrets.
+</Warning>
+
+## Payment flow
+
+<Steps>
+  <Step title="Create a checkout session">
+    Your client sends a `POST` request with the `courseId` the user wants to buy. The server looks up the course, creates a Stripe Checkout session priced in USD, records a `CoursePurchase` document with status `pending`, and returns the full session object.
+
+    ```bash
+    curl -X POST https://your-api/api/v1/payments/create-checkout-session \
+      -H "Content-Type: application/json" \
+      -H "Cookie: token=<your-auth-token>" \
+      -d '{"courseId": "64f1a2b3c4d5e6f7a8b9c0d1"}'
+    ```
+
+    **Response**
+
+    ```json
+    {
+      "success": true,
+      "message": "Stripe checkout initiated successfully.",
+      "data": {
+        "session": {
+          "id": "cs_test_a1B2c3D4e5F6...",
+          "url": "https://checkout.stripe.com/pay/cs_test_a1B2c3D4e5F6...",
+          "payment_status": "unpaid",
+          "metadata": {
+            "courseId": "64f1a2b3c4d5e6f7a8b9c0d1",
+            "userId": "64e0f1a2b3c4d5e6f7a8b9c0"
+          }
+        },
+        "coursePurchase": {
+          "_id": "64f2a3b4c5d6e7f8a9b0c1d2",
+          "status": "pending",
+          "paymentMethod": "stripe",
+          "currency": "USD",
+          "amount": 49
+        },
+        "course": {
+          "title": "Complete Node.js Bootcamp",
+          "description": "...",
+          "amount": 49
+        }
+      }
+    }
+    ```
+
+    <Note>
+    This endpoint requires authentication. The `isAuthenticated` middleware reads the user ID from the request, so the user must be logged in before initiating checkout.
+    </Note>
+  </Step>
+
+  <Step title="Redirect the user to Stripe">
+    Extract `data.session.url` from the response and redirect the browser there. Stripe hosts the payment form — no card UI is needed in your frontend.
+
+    ```javascript
+    const { data } = await response.json();
+    window.location.href = data.session.url;
+    ```
+  </Step>
+
+  <Step title="Handle post-payment redirects">
+    After payment, Stripe redirects the user back to your app:
+
+    - **Success:** `STRIPE_SUCCESS_URL` — the `session_id` query parameter is appended automatically when you use `{CHECKOUT_SESSION_ID}` in the URL template.
+    - **Cancel:** `STRIPE_CANCEL_URL` — the user abandoned checkout; the purchase remains `pending` in the database.
+
+    <Tip>
+    Check the purchase status at `GET /api/v1/payments/courses/:courseId/purchase-status` to confirm the final state before unlocking course content.
+    </Tip>
+  </Step>
+
+  <Step title="Stripe calls the webhook">
+    After a charge settles, Stripe sends a `POST` request to `POST /api/v1/payments/webhook`. The server verifies the `stripe-signature` header and updates the `CoursePurchase` record accordingly.
+
+    | Event | Result |
+    |---|---|
+    | `charge.succeeded` | Purchase status set to `completed` |
+    | `charge.failed` | Purchase status set to `failed` |
+
+    The webhook responds with `{"received": true}` on success. Any other event type is logged and ignored.
+  </Step>
+</Steps>
+
+## Purchase status lifecycle
+
+A `CoursePurchase` document moves through these states:
+
+```
+pending  →  completed   (charge.succeeded webhook received)
+         →  failed      (charge.failed webhook received)
+```
+
+The `refunded` status exists in the model but is not set by the Stripe webhook handler — it is reserved for manual refund processing.
+
+## Webhook setup
+
+### Why `express.raw` is required
+
+The webhook route is registered with `express.raw({ type: 'application/json' })` instead of the standard JSON body parser:
+
+```javascript
+router.post("/webhook", express.raw({ type: 'application/json' }), handleStripeWebhook);
+```
+
+Stripe's signature verification (`stripe.webhooks.constructEvent`) requires the **raw, unmodified request body** as a `Buffer`. If any middleware parses the body into a JavaScript object first, the bytes change and the signature check will always fail with a 400 error.
+
+<Warning>
+Do not add `express.json()` or any other body-parsing middleware to the webhook route. The `express.raw` middleware on this route must receive the unmodified byte stream.
+</Warning>
+
+### Test webhooks locally with Stripe CLI
+
+Run the Stripe CLI listener to forward live Stripe events to your local server:
+
+```bash
+stripe listen --forward-to localhost:4000/api/v1/payments/webhook
+```
+
+The CLI prints a webhook signing secret — set it as `STRIPE_WEBHOOK_SECRET` in your `.env` for local testing. Stop the listener with `Ctrl+C` when done.
+
+<Note>
+Install the Stripe CLI from [stripe.com/docs/stripe-cli](https://stripe.com/docs/stripe-cli) before running the command above.
+</Note>
+
+## Related endpoints
+
+<AccordionGroup>
+  <Accordion title="GET /api/v1/payments/courses/:courseId/purchase-status">
+    Returns the purchase status for the authenticated user and a given course. Use this after the Stripe redirect to decide whether to unlock course content.
+
+    **Response**
+
+    ```json
+    {
+      "status": "success",
+      "data": {
+        "course": {
+          "title": "Complete Node.js Bootcamp",
+          "price": 49
+        },
+        "purchaseStatus": "completed"
+      }
+    }
+    ```
+
+    `purchaseStatus` will be `"not purchased"` if no record exists.
+  </Accordion>
+
+  <Accordion title="GET /api/v1/payments/purchased-courses">
+    Returns all courses the authenticated user has successfully purchased (status `completed`), sorted newest first.
+
+    **Response shape**
+
+    ```json
+    {
+      "status": "success",
+      "data": {
+        "purchase": [
+          {
+            "course": { "title": "...", "price": 49 },
+            "amount": 49,
+            "currency": "USD",
+            "paymentMethod": "stripe",
+            "createdAt": "2024-09-01T10:00:00.000Z"
+          }
+        ]
+      }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,157 @@
+---
+title: "Error responses and status codes — LMS Backend"
+description: "Standard error response shape, all HTTP status codes the API returns, validation error format, and how to distinguish each failure mode in client code."
+---
+
+Every error the LMS Backend returns follows a predictable JSON structure. Understanding this structure lets you write a single error-handling path in your client and branch on `status` or HTTP status code only when you need to handle a specific case differently. There is one notable exception: validation errors use a distinct shape described below.
+
+## Standard error response
+
+When a request fails, the server responds with a JSON object containing `status` and `message` fields. The `status` value is `"fail"` for client errors (`4xx`) and `"error"` for server errors (`5xx`), derived from the `ApiError` class in `error.middleware.js`.
+
+```json
+{
+  "status": "fail",
+  "message": "You are not logged in"
+}
+```
+
+In development mode (`NODE_ENV=development`), the server appends the full stack trace to help you debug:
+
+```json
+{
+  "status": "error",
+  "message": "Internal server error",
+  "stack": "Error: Internal server error\n    at ..."
+}
+```
+
+<Warning>
+  Never expose `NODE_ENV=development` in production. The `stack` field reveals internal file paths and logic that could aid an attacker.
+</Warning>
+
+## HTTP status codes
+
+<AccordionGroup>
+  <Accordion title="401 — Unauthenticated">
+    The request reached a protected route but no valid session was found. This happens in two situations, both handled by `isAuthenticated` in `auth.middleware.js`:
+
+    **No token cookie present:**
+    ```json
+    {
+      "status": "fail",
+      "message": "You are not logged in"
+    }
+    ```
+
+    **Token present but invalid or expired:**
+    ```json
+    {
+      "status": "fail",
+      "message": "JWT token error"
+    }
+    ```
+
+    To resolve a `401`, sign in via `POST /api/v1/user/signin` to receive a fresh `token` cookie, then retry the request.
+  </Accordion>
+
+  <Accordion title="400 — Validation error">
+    Validation errors are returned by the `validate` middleware in `validation.middleware.js` before a request handler runs. They use a **different shape** from all other errors: instead of a single `message` string, the response body is an object with an `errors` array. Each element identifies the invalid field and describes the problem.
+
+    ```json
+    {
+      "errors": [
+        {
+          "field": "email",
+          "message": "Please provide a valid email"
+        },
+        {
+          "field": "name",
+          "message": "Please provide a valid name"
+        }
+      ]
+    }
+    ```
+
+    There is no top-level `status` key in validation error responses. Check for the presence of the `errors` array to detect this case in your client code.
+
+    Common validation constraints enforced on sign-up:
+
+    | Field | Rule |
+    | ----- | ---- |
+    | `email` | Must be a valid email address |
+    | `name` | 2–50 characters after trimming whitespace |
+    | `page` (query) | Optional; must be a positive integer |
+    | `limit` (query) | Optional; must be between 1 and 100 |
+  </Accordion>
+
+  <Accordion title="403 — Forbidden">
+    The request is authenticated but the caller does not have permission to perform the action. A common example is an instructor attempting to modify a course owned by a different instructor.
+
+    ```json
+    {
+      "status": "fail",
+      "message": "Not authorized"
+    }
+    ```
+
+    A `403` is distinct from a `401`: a `401` means the server does not know who you are; a `403` means the server knows who you are but is refusing the action.
+  </Accordion>
+
+  <Accordion title="404 — Not found">
+    The requested resource does not exist. This is returned both for missing domain objects (a course, a user) and for routes that do not match any registered handler.
+
+    **Missing resource (e.g., course or user lookup):**
+    ```json
+    {
+      "status": "fail",
+      "message": "Course not found"
+    }
+    ```
+
+    **Unrecognized route:**
+    ```json
+    {
+      "status": "error",
+      "message": "Route not found."
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="500 — Internal server error">
+    An unexpected condition prevented the server from fulfilling the request. In production, the response contains only the message. In development, `stack` is also included.
+
+    ```json
+    {
+      "status": "error",
+      "message": "Internal server error"
+    }
+    ```
+
+    If you receive a `500`, check the server logs. The error is logged to `console.error` with the full stack trace regardless of `NODE_ENV`.
+  </Accordion>
+</AccordionGroup>
+
+## Validation errors vs. all other errors
+
+The two response shapes are intentionally different. Use the table below to decide how to handle each in your client:
+
+| Condition | Top-level keys | How to detect |
+| --------- | -------------- | -------------- |
+| Standard error | `status`, `message` (+ `stack` in dev) | `response.status` !== `200`; read `body.message` |
+| Validation error | `errors` (array of `{ field, message }`) | `body.errors` is an array |
+
+<Tip>
+  A single request can fail multiple validations at once. Always iterate over the entire `errors` array and surface all messages to the user rather than stopping at the first one.
+</Tip>
+
+## Quick reference
+
+| Status code | Meaning | `status` field |
+| ----------- | ------- | -------------- |
+| `400` | Validation failed — see `errors` array | *(not present)* |
+| `401` | Not logged in or invalid token | `"fail"` |
+| `403` | Authenticated but not permitted | `"fail"` |
+| `404` | Resource or route not found | `"fail"` / `"error"` |
+| `429` | Rate limit exceeded | *(plain text message)* |
+| `500` | Unexpected server error | `"error"` |

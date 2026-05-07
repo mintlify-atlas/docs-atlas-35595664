@@ -1,0 +1,118 @@
+---
+title: "Architecture overview of LMS Backend"
+description: "Understand how the LMS Backend is structured, how a request flows through the system, and which route groups are available under the /api/v1 base URL."
+---
+
+The LMS Backend is a Node.js/Express REST API organized around a layered folder structure where each layer has a single responsibility. Every HTTP request enters through a shared middleware stack — security, rate limiting, body parsing — before reaching a route handler, which delegates logic to a controller, which in turn reads and writes data through a Mongoose model. Understanding this flow helps you predict error shapes, know where auth is enforced, and debug failed requests effectively.
+
+## Folder structure
+
+```text
+Learning-Management-System-backend/
+├── index.js                  # App bootstrap, middleware registration, route mounting
+├── databases/
+│   └── db.js                 # MongoDB connection
+├── routes/                   # Express routers — one file per resource
+│   ├── health.routes.js
+│   ├── user.routes.js
+│   ├── course.routes.js
+│   ├── courseProgress.routes.js
+│   └── coursePurchase.routes.js
+├── controllers/              # Business logic — called by routes
+│   ├── user.controller.js
+│   ├── course.controller.js
+│   ├── courseProgress.controller.js
+│   ├── coursePurchase.controller.js
+│   └── razorpay.controller.js
+├── middleware/               # Reusable request processors
+│   ├── auth.middleware.js    # JWT cookie verification
+│   ├── validation.middleware.js
+│   └── error.middleware.js
+├── models/                   # Mongoose schemas
+│   ├── user.model.js
+│   ├── course.model.js
+│   ├── lecture.model.js
+│   ├── courseProgress.js
+│   └── coursePurchase.model.js
+└── utils/                    # Stateless helpers
+    ├── cloudinary.js         # Upload/delete media via Cloudinary SDK
+    ├── multer.js             # Multipart file handling
+    └── generateToken.js      # JWT signing and cookie setting
+```
+
+## Request lifecycle
+
+Every request passes through the following stages in order:
+
+<Steps>
+  <Step title="Security middleware">
+    Helmet sets HTTP security headers. HPP blocks HTTP parameter pollution. `mongo-sanitize` strips MongoDB operators from `req.body` and `req.params`. The global rate limiter (`/api/*`) enforces 100 requests per 15 minutes per IP.
+  </Step>
+  <Step title="Body parsing">
+    The Stripe webhook path (`/api/v1/payments/webhook`) receives a raw `Buffer` so Stripe's signature verification works. All other routes receive JSON and URL-encoded bodies parsed up to 10 kb. `cookie-parser` makes `req.cookies` available.
+  </Step>
+  <Step title="Route matching">
+    Express matches the method and path to the correct router file mounted in `index.js`. Unmatched requests fall through to a 404 handler that returns `{ status: "error", message: "Route not found." }`.
+  </Step>
+  <Step title="Route-level middleware">
+    Individual routes may apply `isAuthenticated` (JWT check), `validateSignUp` (input validation), or `upload.single(...)` (file upload) before reaching the controller function.
+  </Step>
+  <Step title="Controller">
+    The controller function contains the business logic. It queries or mutates one or more Mongoose models, calls utility helpers (e.g. `uploadMedia`, `generateToken`), and builds the response object.
+  </Step>
+  <Step title="Model">
+    Mongoose models enforce schema validation, run `pre('save')` hooks (e.g. bcrypt password hashing), and execute the database query against MongoDB.
+  </Step>
+  <Step title="Response">
+    The controller sends a JSON response. On error, an `ApiError` is thrown and caught by `catchAsync`, which forwards it to Express's error handler, returning a consistent `{ status, message }` shape.
+  </Step>
+</Steps>
+
+## API route groups
+
+All routes are mounted under the base URL `/api/v1`.
+
+```text
+Base URL: /api/v1
+
+/api/v1/healthcheck   →  health.routes.js
+/api/v1/user          →  user.routes.js
+/api/v1/courses       →  course.routes.js
+/api/v1/progress      →  courseProgress.routes.js
+/api/v1/payments      →  coursePurchase.routes.js
+```
+
+<CardGroup cols={2}>
+  <Card title="/api/v1/user" icon="user">
+    Account creation, sign-in, sign-out, profile management, avatar upload, password change, forgot/reset password, and account deletion.
+  </Card>
+  <Card title="/api/v1/courses" icon="book-open">
+    Browse published courses, search by keyword, fetch course details and lectures, create courses (instructors), add lectures with video upload, and update course details.
+  </Card>
+  <Card title="/api/v1/progress" icon="chart-line">
+    Track lecture-level completion for an enrolled student, mark a course as fully completed, and reset progress back to zero.
+  </Card>
+  <Card title="/api/v1/payments" icon="credit-card">
+    Initiate a Stripe Checkout session to purchase a course, receive Stripe webhook events, check purchase status for a specific course, and list all purchased courses.
+  </Card>
+  <Card title="/api/v1/healthcheck" icon="heart-pulse">
+    Lightweight liveness probe. Returns a 200 response with no authentication required — useful for load balancer health checks.
+  </Card>
+</CardGroup>
+
+## Error response shape
+
+All errors — whether operational (wrong password, missing field) or unexpected (unhandled exception) — are returned in a consistent envelope:
+
+```json
+{
+  "status": "fail",
+  "message": "Invalid Email or password"
+}
+```
+
+`status` is `"fail"` for 4xx errors and `"error"` for 5xx errors. In development mode the response also includes a `stack` field.
+
+<Note>
+  The `password` field is excluded from all User query results by default (`select: false` in the schema). It is only fetched explicitly when comparing passwords during sign-in.
+</Note>

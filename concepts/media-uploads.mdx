@@ -1,0 +1,185 @@
+---
+title: "Upload course thumbnails and lecture videos"
+description: "How LMS Backend file uploads work: Multer writes to disk, the controller streams to Cloudinary, and the returned URL is stored on the course or lecture."
+---
+
+The LMS Backend handles two types of media uploads: course thumbnails (images) and lecture videos. Both follow the same pipeline — Multer writes the incoming file to a temporary directory on disk, the controller then reads that file path and streams it to Cloudinary, and the returned Cloudinary URL is persisted on the database document. Cloudinary URLs are what you receive back in API responses.
+
+## Upload pipeline
+
+<Steps>
+  <Step title="Multipart request arrives">
+    Your client sends a `multipart/form-data` request. Multer is applied as route-level middleware using `upload.single(fieldName)`, where `fieldName` is either `"thumbnail"` or `"video"` depending on the endpoint.
+  </Step>
+  <Step title="Multer writes to disk">
+    The Multer instance is configured with `dest: "upload"`, which writes the uploaded file to a local `upload/` directory as a temporary file. The file's path is available on `req.file.path`.
+
+    ```javascript utils/multer.js
+    import multer from "multer";
+
+    const upload = multer({ dest: "upload" });
+
+    export default upload;
+    ```
+  </Step>
+  <Step title="Controller uploads to Cloudinary">
+    The controller calls `uploadMedia(req.file.path)`. Cloudinary's SDK reads the temp file, uploads it with `resource_type: "auto"` (which automatically detects images and videos), and returns an upload response object.
+
+    ```javascript utils/cloudinary.js
+    export const uploadMedia = async (file) => {
+        try {
+            const uploadResponse = await cloudinary.uploader.upload(file, {
+                resource_type: "auto"
+            });
+            return uploadResponse;
+        } catch (error) {
+            console.log("Error in uploading media to cloudinary.");
+            console.log(error);
+        }
+    }
+    ```
+  </Step>
+  <Step title="Cloudinary URL saved to database">
+    The controller extracts `uploadResponse.secure_url` and saves it on the relevant document field (e.g. `course.thumbnail` or `lecture.videoUrl`). That URL is returned in the API response.
+  </Step>
+</Steps>
+
+## Supported file types and field names
+
+Cloudinary's `resource_type: "auto"` means the SDK infers the type from the file content rather than relying on the MIME type or extension. In practice:
+
+| Endpoint | Field name | Expected content |
+|---|---|---|
+| `POST /api/v1/courses` | `thumbnail` | Image (JPEG, PNG, WebP, etc.) |
+| `PATCH /api/v1/courses/:courseId` | `thumbnail` | Image (JPEG, PNG, WebP, etc.) |
+| `POST /api/v1/courses/:courseId/lectures` | `video` | Video (MP4, MOV, WebM, etc.) |
+| `PATCH /api/v1/user/profile` | `avatar` | Image (JPEG, PNG, WebP, etc.) |
+
+<Note>
+  Multer does not enforce a file size limit or MIME type filter in the current configuration. Cloudinary's own upload limits apply. Cloudinary free-tier accounts have a 10 MB image limit and a 100 MB video limit per upload.
+</Note>
+
+## Uploading a course thumbnail
+
+Creating a course requires `isAuthenticated` middleware and a `multipart/form-data` body with a `thumbnail` file field alongside the course text fields:
+
+<CodeGroup>
+
+```bash curl
+curl -b cookies.txt -X POST https://api.example.com/api/v1/courses \
+  -F "title=Introduction to Node.js" \
+  -F "description=Learn Node.js from the ground up" \
+  -F "category=Backend Development" \
+  -F "level=Beginner" \
+  -F "price=29.99" \
+  -F "thumbnail=@/path/to/thumbnail.jpg"
+```
+
+```javascript JavaScript (fetch)
+const form = new FormData();
+form.append("title", "Introduction to Node.js");
+form.append("description", "Learn Node.js from the ground up");
+form.append("category", "Backend Development");
+form.append("level", "Beginner");
+form.append("price", "29.99");
+form.append("thumbnail", fileInput.files[0]);
+
+const response = await fetch("/api/v1/courses", {
+  method: "POST",
+  body: form,
+  credentials: "include",  // sends the token cookie
+});
+```
+
+</CodeGroup>
+
+The response includes the Cloudinary URL on the `thumbnail` field:
+
+```json
+{
+  "success": true,
+  "message": "Course created successfully",
+  "course": {
+    "_id": "64f3a...",
+    "title": "Introduction to Node.js",
+    "thumbnail": "https://res.cloudinary.com/your-cloud/image/upload/v1.../abc123.jpg"
+  }
+}
+```
+
+## Adding a lecture with a video
+
+Adding a lecture to an existing course uses `upload.single("video")`. Send the video file under the `video` field:
+
+<CodeGroup>
+
+```bash curl
+curl -b cookies.txt \
+  -X POST https://api.example.com/api/v1/courses/64f3a.../lectures \
+  -F "title=Setting up your environment" \
+  -F "description=Install Node.js, npm, and your first Express app" \
+  -F "isPreview=false" \
+  -F "video=@/path/to/lecture-01.mp4"
+```
+
+```javascript JavaScript (fetch)
+const form = new FormData();
+form.append("title", "Setting up your environment");
+form.append("description", "Install Node.js, npm, and your first Express app");
+form.append("isPreview", "false");
+form.append("video", videoInput.files[0]);
+
+const response = await fetch("/api/v1/courses/64f3a.../lectures", {
+  method: "POST",
+  body: form,
+  credentials: "include",
+});
+```
+
+</CodeGroup>
+
+The response returns the lecture's Cloudinary video URL:
+
+```json
+{
+  "success": true,
+  "message": "Lecture added successfully",
+  "lecture": {
+    "_id": "64f3b...",
+    "title": "Setting up your environment",
+    "videoUrl": "https://res.cloudinary.com/your-cloud/video/upload/v1.../lecture01.mp4"
+  }
+}
+```
+
+## Updating or replacing media
+
+When you update a course (`PATCH /api/v1/courses/:courseId`) or a user avatar (`PATCH /api/v1/user/profile`) with a new file, the controller deletes the old Cloudinary asset before uploading the replacement. Deletion uses the asset's `public_id`:
+
+```javascript utils/cloudinary.js
+export const deleteMediaFromCloudinary = async (publicId) => {
+    try {
+        await cloudinary.uploader.destroy(publicId)
+    } catch (error) {
+        console.log("Failed to delete MEDIA from cloudinary");
+        console.error(error);
+    }
+}
+
+export const deleteVideoFromCloudinary = async (publicId) => {
+    try {
+        await cloudinary.uploader.destroy(publicId, { resource_type: "video" })
+    } catch (error) {
+        console.log("Failed to delete MEDIA from cloudinary");
+        console.error(error);
+    }
+}
+```
+
+<Warning>
+  Do not send a `Content-Type: application/json` header when uploading files. The browser or curl sets the correct `multipart/form-data` boundary automatically when you use `FormData` or `-F` flags. Setting the header manually will break multipart parsing.
+</Warning>
+
+<Tip>
+  The avatar update flow checks whether the existing avatar is the default (`"default-avatar.png"`) before attempting to delete it from Cloudinary. Default avatars are not stored in Cloudinary and do not have a `public_id` to delete.
+</Tip>

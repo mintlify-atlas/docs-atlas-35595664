@@ -1,0 +1,191 @@
+---
+title: "Authenticate requests to LMS Backend"
+description: "How JWT cookie auth works in LMS Backend: sign in to receive the token cookie, call protected endpoints, handle 401 errors, and reset forgotten passwords."
+---
+
+The LMS Backend uses JWT tokens delivered as HTTP-only cookies. When you sign in, the server mints a signed token, writes it into a `Set-Cookie` header, and every subsequent request to a protected endpoint is authenticated by reading that cookie — no `Authorization` header required. This approach keeps the token out of JavaScript's reach on the client side.
+
+## How the token is issued
+
+When a sign-in or sign-up request succeeds, `generateToken` signs a JWT containing the user's `_id` and sets it in a cookie:
+
+```javascript utils/generateToken.js
+const token = jwt.sign({ userId: user._id }, process.env.SECRET_KEY, {
+    expiresIn: "1d"
+});
+return res
+    .status(200)
+    .cookie("token", token, {
+        httpOnly: true,
+        sameSite: true,
+        maxAge: 24 * 60 * 60 * 1000 // 1 day
+    }).json({
+        success: true,
+        message,
+        user,
+        token
+    });
+```
+
+The token expires in **24 hours**. The `httpOnly` flag prevents client-side JavaScript from reading the cookie. The `sameSite` flag provides CSRF protection.
+
+## Signing in
+
+<Steps>
+  <Step title="Send credentials">
+    POST your email and password to the sign-in endpoint. The server fetches the user record (including the hashed password via `select('+password')`), compares the password with bcrypt, and returns the token cookie on success.
+
+    ```bash
+    curl -c cookies.txt -X POST https://api.example.com/api/v1/user/signin \
+      -H "Content-Type: application/json" \
+      -d '{"email": "jane@example.com", "password": "secret1234"}'
+    ```
+  </Step>
+  <Step title="Cookie is set automatically">
+    The response includes a `Set-Cookie: token=<jwt>; HttpOnly; SameSite=Strict; Max-Age=86400` header. HTTP clients that support cookie jars (browsers, curl's `-c`/`-b` flags) store and send this automatically.
+
+    ```json
+    {
+      "success": true,
+      "message": "Welcome back Jane",
+      "user": { "_id": "...", "name": "Jane", "role": "student" },
+      "token": "<jwt>"
+    }
+    ```
+  </Step>
+</Steps>
+
+## Making authenticated requests
+
+Protected endpoints read the token from `req.cookies.token`. Pass the saved cookie jar on every subsequent call:
+
+```bash
+# GET the current user's profile — requires the token cookie
+curl -b cookies.txt https://api.example.com/api/v1/user/profile
+```
+
+In a browser or any client that manages cookies automatically, no extra headers are needed. If you are calling the API from a server-to-server context and need to pass the token manually, set the `Cookie` header:
+
+```bash
+curl -X GET https://api.example.com/api/v1/user/profile \
+  -H "Cookie: token=<your-jwt-here>"
+```
+
+## How the server verifies the token
+
+The `isAuthenticated` middleware runs on every protected route:
+
+```javascript middleware/auth.middleware.js
+export const isAuthenticated = catchAsync(async (req, res, next) => {
+    const token = req.cookies.token;
+
+    if (!token) {
+        throw new ApiError("You are not logged in", 401);
+    }
+
+    try {
+        const decoded = await jwt.verify(token, process.env.SECRET_KEY);
+        req.id = decoded.userId;
+        next();
+    } catch (error) {
+        throw new ApiError("JWT token error", 401);
+    }
+});
+```
+
+On success, `req.id` is set to the authenticated user's MongoDB `_id`. Controllers use `req.id` to scope database queries to the current user.
+
+## 401 error responses
+
+You will receive a `401` in two situations:
+
+<AccordionGroup>
+  <Accordion title="No token cookie present">
+    The `token` cookie is absent — either you never signed in, the cookie expired (after 24 hours), or you signed out. Sign in again to obtain a fresh token.
+
+    ```json
+    {
+      "status": "fail",
+      "message": "You are not logged in"
+    }
+    ```
+  </Accordion>
+  <Accordion title="Token is invalid or tampered">
+    The cookie is present but `jwt.verify` rejects it — the token has been modified, was signed with a different secret, or the server's `SECRET_KEY` changed.
+
+    ```json
+    {
+      "status": "fail",
+      "message": "JWT token error"
+    }
+    ```
+  </Accordion>
+  <Accordion title="Invalid email or password on sign-in">
+    The credentials supplied to `/api/v1/user/signin` do not match a stored user record. The response is intentionally generic to avoid leaking whether the email exists.
+
+    ```json
+    {
+      "status": "fail",
+      "message": "Invalid Email or password"
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Signing out
+
+POST to `/api/v1/user/signout`. The server overwrites the `token` cookie with `maxAge: 0`, which instructs the client to delete it immediately:
+
+```bash
+curl -b cookies.txt -c cookies.txt -X POST \
+  https://api.example.com/api/v1/user/signout
+```
+
+## Password reset flow
+
+If a user forgets their password, use the two-step reset flow — no authentication cookie is required for either step.
+
+<Steps>
+  <Step title="Request a reset token">
+    POST the user's email address. The server generates a random 20-byte token with `crypto.randomBytes`, stores its SHA-256 hash on the user record, and sets a 10-minute expiry. The raw (unhashed) token is returned in the response.
+
+    ```bash
+    curl -X POST https://api.example.com/api/v1/user/forgot-password \
+      -H "Content-Type: application/json" \
+      -d '{"email": "jane@example.com"}'
+    ```
+
+    ```json
+    {
+      "success": true,
+      "message": "Password reset token generated successfully",
+      "data": { "token": "<raw-reset-token>" }
+    }
+    ```
+  </Step>
+  <Step title="Submit the new password">
+    POST the new password to `/api/v1/user/reset-password/:token`, where `:token` is the raw token from step 1. The server hashes the token, looks up the matching user record, confirms the expiry has not passed, and saves the new password.
+
+    ```bash
+    curl -X POST \
+      https://api.example.com/api/v1/user/reset-password/<raw-reset-token> \
+      -H "Content-Type: application/json" \
+      -d '{"newPassword": "newSecret5678"}'
+    ```
+
+    ```json
+    {
+      "success": true,
+      "message": "Password reset successfully. You can now log in with your new password."
+    }
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  The reset token expires in **10 minutes**. If you submit the token after it has expired, the server will return a 400 error: `"Invalid or expired token. Please request a new token."` In that case, repeat the forgot-password step to generate a fresh token.
+</Warning>
+
+<Tip>
+  After a successful password reset, the `resetPasswordToken` and `resetPasswordExpire` fields are cleared from the user document. The old reset token cannot be reused.
+</Tip>

@@ -1,0 +1,175 @@
+---
+title: "Integrate Razorpay payments for Indian markets"
+description: "Create a Razorpay order server-side, collect payment on the client with Razorpay.js, then verify the HMAC signature to confirm the purchase."
+---
+
+The LMS backend includes a Razorpay integration designed for INR payments in Indian markets. Unlike the Stripe flow, Razorpay does not use a hosted checkout page — the backend creates an order, your frontend loads the Razorpay checkout widget directly, and then your client sends the payment identifiers back to the server for HMAC signature verification. There is no webhook listener; the verification step is client-driven.
+
+<Warning>
+The Razorpay controller (`razorpay.controller.js`) is implemented but not currently registered in any route file. To use it, you must manually add routes for `createRazorpayOrder` and `verifyPayment` to a router and mount it in `index.js`. The flow below documents the controller logic as implemented.
+</Warning>
+
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `RAZORPAY_KEY_ID` | Public key — used in both the server SDK and the client-side Razorpay widget |
+| `RAZORPAY_KEY_SECRET` | Private key — used server-side only to sign and verify payments |
+
+<Warning>
+Never send `RAZORPAY_KEY_SECRET` to the browser. Only `RAZORPAY_KEY_ID` should appear in client-side code.
+</Warning>
+
+## Payment flow
+
+<Steps>
+  <Step title="Create an order">
+    The client sends a `POST` request with `courseId`. The server looks up the course price, creates a Razorpay order priced in INR (converted to paise), persists a `CoursePurchase` record with status `pending`, and returns the order object.
+
+    ```bash
+    # Replace /your-razorpay-route with the path you mount the Razorpay router at in index.js
+    curl -X POST http://localhost:4000/your-razorpay-route/create-order \
+      -H "Content-Type: application/json" \
+      -H "Cookie: token=<your-auth-token>" \
+      -d '{"courseId": "64f1a2b3c4d5e6f7a8b9c0d1"}'
+    ```
+
+    **Response**
+
+    ```json
+    {
+      "success": true,
+      "message": "Order created successfully",
+      "order": {
+        "id": "order_OvHkRDGLKHj2ER",
+        "entity": "order",
+        "amount": 4900,
+        "amount_paid": 0,
+        "amount_due": 4900,
+        "currency": "INR",
+        "receipt": "course_64f1a2b3c4d5e6f7a8b9c0d1",
+        "status": "created",
+        "notes": {
+          "courseId": "64f1a2b3c4d5e6f7a8b9c0d1",
+          "userId": "64e0f1a2b3c4d5e6f7a8b9c0"
+        }
+      },
+      "course": {
+        "name": "Complete Node.js Bootcamp",
+        "description": "..."
+      }
+    }
+    ```
+
+    The `amount` field is in **paise** (1 INR = 100 paise). A course priced at ₹49 produces `amount: 4900`.
+  </Step>
+
+  <Step title="Open the Razorpay checkout widget">
+    Load the Razorpay checkout script in your frontend and open the widget using the order details returned in the previous step.
+
+    ```html
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    ```
+
+    ```javascript
+    const options = {
+      key: "RAZORPAY_KEY_ID",           // Your public key
+      amount: order.amount,             // In paise, from the server response
+      currency: "INR",
+      name: course.name,
+      description: course.description,
+      order_id: order.id,               // order.id from the server response
+      handler: function (response) {
+        // Razorpay calls this after successful payment
+        // response contains razorpay_order_id, razorpay_payment_id, razorpay_signature
+        verifyPayment(response);
+      }
+    };
+
+    const rzp = new Razorpay(options);
+    rzp.open();
+    ```
+
+    <Note>
+    The `handler` callback only fires when Razorpay considers the payment attempt successful on its side. You must still verify the signature on your server before treating the purchase as confirmed.
+    </Note>
+  </Step>
+
+  <Step title="Verify payment signature">
+    After the widget calls your `handler`, send the three Razorpay identifiers to the server for HMAC verification. The server reconstructs the expected signature using `RAZORPAY_KEY_SECRET` and compares it against the one Razorpay provided.
+
+    ```bash
+    # Replace /your-razorpay-route with the path you mount the Razorpay router at in index.js
+    curl -X POST http://localhost:4000/your-razorpay-route/verify-payment \
+      -H "Content-Type: application/json" \
+      -H "Cookie: token=<your-auth-token>" \
+      -d '{
+        "razorpay_order_id": "order_OvHkRDGLKHj2ER",
+        "razorpay_payment_id": "pay_OvHkXyZ123ABC",
+        "razorpay_signature": "3b2d1f..."
+      }'
+    ```
+
+    **Success response**
+
+    ```json
+    {
+      "success": true,
+      "message": "Payment verified successfully",
+      "courseId": "64f1a2b3c4d5e6f7a8b9c0d1"
+    }
+    ```
+
+    **Failure response (signature mismatch)**
+
+    ```json
+    {
+      "message": "Payment verification failed"
+    }
+    ```
+
+    On success the server sets the `CoursePurchase` status to `completed`. On failure it returns a 400 without modifying the record.
+  </Step>
+</Steps>
+
+## Signature verification internals
+
+The server verifies payments by recomputing the HMAC-SHA256 signature and doing a direct string comparison:
+
+```javascript
+const body = razorpay_order_id + "|" + razorpay_payment_id;
+const expectedSignature = crypto
+  .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+  .update(body.toString())
+  .digest("hex");
+
+const isAuthentic = expectedSignature === razorpay_signature;
+```
+
+This matches Razorpay's documented verification algorithm. If the signatures do not match the endpoint returns 400 without updating the purchase record — the purchase remains `pending`.
+
+## Purchase status lifecycle
+
+```
+pending  →  completed   (verifyPayment succeeds)
+```
+
+<Note>
+The `failed` and `refunded` statuses exist in the `CoursePurchase` model but are not set by the Razorpay controller. There is no automatic status update if the user closes the widget without paying — those records remain `pending` indefinitely.
+</Note>
+
+## Current limitations
+
+<AccordionGroup>
+  <Accordion title="No webhook listener">
+    The Razorpay integration uses client-driven verification only. There is no server-side webhook endpoint to receive asynchronous Razorpay events (e.g. delayed bank transfers, refunds). If you need server-side event handling, you must implement a webhook handler and register it in the Razorpay dashboard.
+  </Accordion>
+
+  <Accordion title="CoursePurchase record missing currency and paymentMethod">
+    The `createRazorpayOrder` controller creates the `CoursePurchase` document without setting the `currency` or `paymentMethod` fields, both of which are marked `required` in the schema. Depending on your Mongoose validation configuration this may cause a validation error at save time. The Stripe controller sets both fields correctly; the Razorpay controller does not. This is a known gap in the current implementation.
+  </Accordion>
+
+  <Accordion title="INR only">
+    The Razorpay order is always created with `currency: "INR"`. There is no mechanism to override the currency from the client request.
+  </Accordion>
+</AccordionGroup>

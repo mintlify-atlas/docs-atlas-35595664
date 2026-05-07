@@ -1,0 +1,202 @@
+---
+title: "Lecture endpoints — add and list course lectures"
+description: "Upload video lectures to a course via Cloudinary and retrieve the full lecture list. Only the course instructor can add lectures; listing is public."
+---
+
+Lectures belong to a specific course and are stored as independent `Lecture` documents linked to the parent course via an ObjectId array. When you add a lecture, the video file is uploaded to Cloudinary and the resulting secure URL, public ID, and duration are stored on the lecture record. The order field controls how clients sort lectures for playback.
+
+<Info>
+  Lecture endpoints live under the course resource path: `/api/v1/courses/:courseId/lectures`. The `:courseId` segment is the MongoDB ObjectId of the parent course.
+</Info>
+
+---
+
+## POST /api/v1/courses/:courseId/lectures
+
+Add a new lecture to a course. The video file is required and is uploaded to Cloudinary before the lecture document is created. Only the instructor who created the parent course may call this endpoint.
+
+**Auth required:** Yes — must be the course instructor  
+**Content-Type:** `multipart/form-data`
+
+### Path parameters
+
+<ParamField path="courseId" type="string" required>
+  MongoDB ObjectId of the course to add the lecture to.
+</ParamField>
+
+### Request body
+
+<ParamField body="title" type="string" required>
+  Lecture title. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="order" type="number" required>
+  Numeric position of the lecture within the course. Clients use this field to sort lectures for display and playback.
+</ParamField>
+
+<ParamField body="video" type="file" required>
+  Video file to upload. The field name must be `video`. After uploading, the Cloudinary secure URL is stored in `videoUrl` and the Cloudinary `public_id` is stored in `publicId`.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Lecture description. Maximum 500 characters.
+</ParamField>
+
+<ParamField body="isPreview" type="boolean" default="false">
+  When `true`, this lecture is accessible to non-enrolled users as a free preview. Defaults to `false`.
+</ParamField>
+
+### Response — 201
+
+<ResponseField name="success" type="boolean">
+  `true` on successful creation.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Lecture added successfully"`
+</ResponseField>
+
+<ResponseField name="lecture" type="object">
+  The newly created lecture document.
+
+  <Expandable title="lecture fields">
+    <ResponseField name="_id" type="string">MongoDB document ID.</ResponseField>
+    <ResponseField name="title" type="string">Lecture title.</ResponseField>
+    <ResponseField name="description" type="string">Lecture description.</ResponseField>
+    <ResponseField name="videoUrl" type="string">Cloudinary secure URL for the uploaded video.</ResponseField>
+    <ResponseField name="duration" type="number">
+      Video duration in seconds, derived from the Cloudinary upload response. Rounded to two decimal places. Defaults to `0` if Cloudinary does not return a duration.
+    </ResponseField>
+    <ResponseField name="publicId" type="string">Cloudinary public ID used for future deletion or transformation of the video asset.</ResponseField>
+    <ResponseField name="isPreview" type="boolean">Whether this lecture is available as a free preview.</ResponseField>
+    <ResponseField name="order" type="number">Sort position within the course.</ResponseField>
+    <ResponseField name="createdAt" type="string">ISO 8601 creation timestamp.</ResponseField>
+    <ResponseField name="updatedAt" type="string">ISO 8601 last-update timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:4000/api/v1/courses/64f1a2b3c4d5e6f7a8b9c0d1/lectures \
+  --cookie cookies.txt \
+  --form 'title=Setting up the project' \
+  --form 'order=1' \
+  --form 'description=Install Node.js, initialise npm, and configure ESLint.' \
+  --form 'isPreview=true' \
+  --form 'video=@/path/to/lecture-01.mp4'
+```
+
+</CodeGroup>
+
+<Note>
+  Large video files may take several seconds to upload. The request will not respond until the Cloudinary upload completes. Consider setting an appropriate timeout on your HTTP client.
+</Note>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `courseId` is missing |
+| `400` | Video file is missing from the request |
+| `401` | Missing or invalid auth cookie |
+| `403` | Authenticated user is not the course instructor |
+| `404` | Course not found |
+| `500` | Cloudinary upload failed |
+
+---
+
+## GET /api/v1/courses/:courseId/lectures
+
+Retrieve all lectures attached to a course. The full lecture documents are returned (not just IDs), populated from the `lectures` reference array on the course.
+
+**Auth required:** No
+
+### Path parameters
+
+<ParamField path="courseId" type="string" required>
+  MongoDB ObjectId of the course whose lectures you want to list.
+</ParamField>
+
+### Response — 200
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Course lectures retrieved successfully"`
+</ResponseField>
+
+<ResponseField name="lectures" type="array">
+  Array of lecture documents in the order they are stored on the course. Each element has the following fields:
+
+  <Expandable title="lecture fields">
+    <ResponseField name="_id" type="string">MongoDB document ID.</ResponseField>
+    <ResponseField name="title" type="string">Lecture title.</ResponseField>
+    <ResponseField name="description" type="string">Lecture description.</ResponseField>
+    <ResponseField name="videoUrl" type="string">Cloudinary secure URL for the video.</ResponseField>
+    <ResponseField name="duration" type="number">Video duration in seconds.</ResponseField>
+    <ResponseField name="publicId" type="string">Cloudinary public ID.</ResponseField>
+    <ResponseField name="isPreview" type="boolean">Whether the lecture is a free preview.</ResponseField>
+    <ResponseField name="order" type="number">Sort position within the course.</ResponseField>
+    <ResponseField name="createdAt" type="string">ISO 8601 creation timestamp.</ResponseField>
+    <ResponseField name="updatedAt" type="string">ISO 8601 last-update timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request GET \
+  --url http://localhost:4000/api/v1/courses/64f1a2b3c4d5e6f7a8b9c0d1/lectures
+```
+
+</CodeGroup>
+
+```json Example 200 response
+{
+  "success": true,
+  "message": "Course lectures retrieved successfully",
+  "lectures": [
+    {
+      "_id": "65a1b2c3d4e5f6a7b8c9d0e1",
+      "title": "Setting up the project",
+      "description": "Install Node.js, initialise npm, and configure ESLint.",
+      "videoUrl": "https://res.cloudinary.com/demo/video/upload/v1700000000/lecture-01.mp4",
+      "duration": 312.45,
+      "publicId": "lms/lectures/lecture-01",
+      "isPreview": true,
+      "order": 1,
+      "createdAt": "2024-11-15T10:00:00.000Z",
+      "updatedAt": "2024-11-15T10:00:00.000Z"
+    },
+    {
+      "_id": "65a1b2c3d4e5f6a7b8c9d0e2",
+      "title": "Creating your first Express route",
+      "description": "Define GET and POST handlers and test them with curl.",
+      "videoUrl": "https://res.cloudinary.com/demo/video/upload/v1700000001/lecture-02.mp4",
+      "duration": 487.10,
+      "publicId": "lms/lectures/lecture-02",
+      "isPreview": false,
+      "order": 2,
+      "createdAt": "2024-11-15T10:15:00.000Z",
+      "updatedAt": "2024-11-15T10:15:00.000Z"
+    }
+  ]
+}
+```
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `courseId` is missing |
+| `404` | Course not found |
+
+---
+
+<Tip>
+  To present lectures in the correct viewing order, sort the returned array by the `order` field on the client side. The API returns lectures in the order they were pushed onto the course's `lectures` array, which may differ from the `order` field if lectures were added out of sequence.
+</Tip>

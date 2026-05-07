@@ -1,0 +1,421 @@
+---
+title: "Course endpoints — create, search, and manage"
+description: "Create courses with thumbnail uploads, search and browse the published catalog, retrieve full course details, and update existing courses as an instructor."
+---
+
+Courses are the central resource in the LMS Backend. Each course has a title, optional subtitle and description, a category, a difficulty level, a price, and a Cloudinary-hosted thumbnail. Only the authenticated instructor who created a course can update it. Students browse published courses and enroll via the payments flow.
+
+<Info>
+  All endpoints are prefixed with `/api/v1/courses`. Protected endpoints require the HTTP-only `token` cookie set during sign-in.
+</Info>
+
+---
+
+## POST /api/v1/courses
+
+Create a new course. The thumbnail image is uploaded to Cloudinary and its secure URL is stored in the document. You must be authenticated — the server reads the instructor ID from the verified JWT cookie.
+
+**Auth required:** Yes  
+**Content-Type:** `multipart/form-data`
+
+### Request body
+
+<ParamField body="title" type="string" required>
+  Course title. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="category" type="string" required>
+  Course category (free text, e.g. `"Web Development"`, `"Data Science"`).
+</ParamField>
+
+<ParamField body="price" type="number" required>
+  Course price in USD. Must be a non-negative number.
+</ParamField>
+
+<ParamField body="thumbnail" type="file" required>
+  Thumbnail image file. The field name must be `thumbnail`. Uploaded to Cloudinary; the returned secure URL is stored on the course document.
+</ParamField>
+
+<ParamField body="subtitle" type="string">
+  Short one-line subtitle. Maximum 200 characters. Defaults to an empty string if omitted.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Full course description. No length limit enforced by the model.
+</ParamField>
+
+<ParamField body="level" type="string" default="beginner">
+  Difficulty level. Accepted values: `beginner`, `intermediate`, `advanced`.
+</ParamField>
+
+### Response — 201
+
+<ResponseField name="success" type="boolean">
+  `true` on successful creation.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Course created successfully"`
+</ResponseField>
+
+<ResponseField name="course" type="object">
+  The newly created course document.
+
+  <Expandable title="course fields">
+    <ResponseField name="_id" type="string">MongoDB document ID.</ResponseField>
+    <ResponseField name="title" type="string">Course title.</ResponseField>
+    <ResponseField name="subtitle" type="string">Short subtitle.</ResponseField>
+    <ResponseField name="description" type="string">Full description.</ResponseField>
+    <ResponseField name="category" type="string">Course category.</ResponseField>
+    <ResponseField name="level" type="string">`beginner`, `intermediate`, or `advanced`.</ResponseField>
+    <ResponseField name="price" type="number">Price in USD.</ResponseField>
+    <ResponseField name="thumbnail" type="string">Cloudinary secure URL for the thumbnail image.</ResponseField>
+    <ResponseField name="instructor" type="string">ObjectId of the creating user.</ResponseField>
+    <ResponseField name="isPublished" type="boolean">Whether the course is visible in the public catalog. Default: `false`.</ResponseField>
+    <ResponseField name="lectures" type="array">Array of lecture ObjectIds. Empty on creation.</ResponseField>
+    <ResponseField name="enrolledStudents" type="array">Array of student ObjectIds. Empty on creation.</ResponseField>
+    <ResponseField name="totalLectures" type="number">Computed from `lectures.length`. Default: `0`.</ResponseField>
+    <ResponseField name="totalDuration" type="number">Total duration in seconds. Default: `0`.</ResponseField>
+    <ResponseField name="createdAt" type="string">ISO 8601 creation timestamp.</ResponseField>
+    <ResponseField name="updatedAt" type="string">ISO 8601 last-update timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:4000/api/v1/courses \
+  --cookie cookies.txt \
+  --form 'title=Introduction to Node.js' \
+  --form 'category=Web Development' \
+  --form 'price=49' \
+  --form 'level=beginner' \
+  --form 'subtitle=Build REST APIs from scratch' \
+  --form 'description=A complete beginner course covering Express, MongoDB, and authentication.' \
+  --form 'thumbnail=@/path/to/thumbnail.jpg'
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Thumbnail file is missing from the request |
+| `401` | Missing or invalid auth cookie |
+
+---
+
+## GET /api/v1/courses/search
+
+Search for courses using one or more text filters. At least one query parameter must be provided. Results are sorted by most recently created and paginated.
+
+**Auth required:** No
+
+### Query parameters
+
+<ParamField query="title" type="string">
+  Case-insensitive partial match on the course title.
+</ParamField>
+
+<ParamField query="subtitle" type="string">
+  Case-insensitive partial match on the subtitle.
+</ParamField>
+
+<ParamField query="description" type="string">
+  Case-insensitive partial match on the description text.
+</ParamField>
+
+<ParamField query="category" type="string">
+  Case-insensitive partial match on the category.
+</ParamField>
+
+<ParamField query="level" type="string">
+  Exact match on difficulty level: `beginner`, `intermediate`, or `advanced`.
+</ParamField>
+
+<ParamField query="price" type="number">
+  Maximum price. Returns courses with `price <= this value`.
+</ParamField>
+
+<ParamField query="page" type="number" default="1">
+  Page number (1-indexed).
+</ParamField>
+
+<ParamField query="limit" type="number" default="10">
+  Number of results per page.
+</ParamField>
+
+### Response — 200
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  <Expandable title="data properties">
+    <ResponseField name="courses" type="array">
+      Array of matching course objects. The `instructor` field is populated with `name` and `email`.
+    </ResponseField>
+    <ResponseField name="totalCourses" type="number">Total matching documents across all pages.</ResponseField>
+    <ResponseField name="totalPages" type="number">Total number of pages at the requested `limit`.</ResponseField>
+    <ResponseField name="currentPage" type="number">The current page number.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL — search by category and level
+curl --request GET \
+  --url 'http://localhost:4000/api/v1/courses/search?category=Web+Development&level=beginner&page=1&limit=10'
+```
+
+```bash cURL — search by title with price cap
+curl --request GET \
+  --url 'http://localhost:4000/api/v1/courses/search?title=Node.js&price=50'
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | No search parameters provided |
+
+---
+
+## GET /api/v1/courses/published
+
+Retrieve a paginated list of all published courses. The `instructor` field on each course is populated with `name` and `email`.
+
+**Auth required:** No
+
+### Query parameters
+
+<ParamField query="page" type="number" default="1">
+  Page number (1-indexed).
+</ParamField>
+
+<ParamField query="limit" type="number" default="10">
+  Results per page.
+</ParamField>
+
+### Response — 200
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  <Expandable title="data properties">
+    <ResponseField name="courses" type="array">Paginated array of published course objects.</ResponseField>
+    <ResponseField name="totalCourses" type="number">Total published courses in the database.</ResponseField>
+    <ResponseField name="totalPages" type="number">Total pages at the requested limit.</ResponseField>
+    <ResponseField name="currentPage" type="number">Current page number.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request GET \
+  --url 'http://localhost:4000/api/v1/courses/published?page=1&limit=12'
+```
+
+</CodeGroup>
+
+---
+
+## GET /api/v1/courses/my-courses
+
+Retrieve all courses created by the authenticated user. Results are sorted by most recently created. The `instructor` field is populated.
+
+**Auth required:** Yes
+
+### Query parameters
+
+<ParamField query="page" type="number" default="1">
+  Page number.
+</ParamField>
+
+<ParamField query="limit" type="number" default="10">
+  Results per page.
+</ParamField>
+
+### Response — 200
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  <Expandable title="data properties">
+    <ResponseField name="courses" type="array">The instructor's courses, sorted newest first.</ResponseField>
+    <ResponseField name="totalCourses" type="number">Total courses belonging to this instructor.</ResponseField>
+    <ResponseField name="totalPages" type="number">Total pages.</ResponseField>
+    <ResponseField name="currentPage" type="number">Current page.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request GET \
+  --url 'http://localhost:4000/api/v1/courses/my-courses' \
+  --cookie cookies.txt
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `401` | Missing or invalid auth cookie |
+
+---
+
+## GET /api/v1/courses/:courseId
+
+Retrieve full details for a single course. The `instructor` field is populated with `name` and `email`. The `lectures` array is populated with each lecture's `title`, `description`, and `videoUrl`.
+
+**Auth required:** No
+
+### Path parameters
+
+<ParamField path="courseId" type="string" required>
+  The MongoDB ObjectId of the course to retrieve.
+</ParamField>
+
+### Response — 200
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="course" type="object">
+  Full course document with instructor and lectures populated.
+
+  <Expandable title="course fields">
+    <ResponseField name="_id" type="string">MongoDB document ID.</ResponseField>
+    <ResponseField name="title" type="string">Course title.</ResponseField>
+    <ResponseField name="subtitle" type="string">Short subtitle.</ResponseField>
+    <ResponseField name="description" type="string">Full description.</ResponseField>
+    <ResponseField name="category" type="string">Course category.</ResponseField>
+    <ResponseField name="level" type="string">Difficulty level.</ResponseField>
+    <ResponseField name="price" type="number">Price in USD.</ResponseField>
+    <ResponseField name="thumbnail" type="string">Cloudinary secure URL.</ResponseField>
+    <ResponseField name="isPublished" type="boolean">Publication status.</ResponseField>
+    <ResponseField name="instructor" type="object">Populated instructor with `_id`, `name`, and `email`.</ResponseField>
+    <ResponseField name="lectures" type="array">Populated lecture objects, each with `_id`, `title`, `description`, and `videoUrl`.</ResponseField>
+    <ResponseField name="totalLectures" type="number">Count of lectures.</ResponseField>
+    <ResponseField name="totalDuration" type="number">Total duration in seconds.</ResponseField>
+    <ResponseField name="enrolledStudents" type="array">Array of enrolled student ObjectIds.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request GET \
+  --url http://localhost:4000/api/v1/courses/64f1a2b3c4d5e6f7a8b9c0d1
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `courseId` is missing |
+
+---
+
+## PATCH /api/v1/courses/:courseId
+
+Update an existing course. Only the instructor who created the course can perform updates. If a new thumbnail is uploaded, the old Cloudinary asset is deleted before the new one is stored. All body fields are optional — send only the fields you want to change.
+
+**Auth required:** Yes — must be the course instructor  
+**Content-Type:** `multipart/form-data` (when uploading a new thumbnail), or `application/json` (text-only updates)
+
+### Path parameters
+
+<ParamField path="courseId" type="string" required>
+  The MongoDB ObjectId of the course to update.
+</ParamField>
+
+### Request body
+
+<ParamField body="title" type="string">
+  Updated course title.
+</ParamField>
+
+<ParamField body="subtitle" type="string">
+  Updated subtitle.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated full description.
+</ParamField>
+
+<ParamField body="category" type="string">
+  Updated category.
+</ParamField>
+
+<ParamField body="level" type="string">
+  Updated difficulty level: `beginner`, `intermediate`, or `advanced`.
+</ParamField>
+
+<ParamField body="price" type="number">
+  Updated price in USD.
+</ParamField>
+
+<ParamField body="thumbnail" type="file">
+  Replacement thumbnail image. The field name must be `thumbnail`. The old Cloudinary asset is deleted automatically.
+</ParamField>
+
+### Response — 200
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Course updated successfully"`
+</ResponseField>
+
+<ResponseField name="course" type="object">
+  The updated course document.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL — update text fields
+curl --request PATCH \
+  --url http://localhost:4000/api/v1/courses/64f1a2b3c4d5e6f7a8b9c0d1 \
+  --cookie cookies.txt \
+  --header 'Content-Type: application/json' \
+  --data '{"price": 39, "level": "intermediate"}'
+```
+
+```bash cURL — replace thumbnail
+curl --request PATCH \
+  --url http://localhost:4000/api/v1/courses/64f1a2b3c4d5e6f7a8b9c0d1 \
+  --cookie cookies.txt \
+  --form 'title=Advanced Node.js' \
+  --form 'thumbnail=@/path/to/new-thumbnail.jpg'
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `courseId` is missing |
+| `401` | Missing or invalid auth cookie |
+| `403` | Authenticated user is not the course instructor |
+| `404` | Course not found |
+| `500` | Database update failed |

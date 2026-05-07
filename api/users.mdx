@@ -1,0 +1,484 @@
+---
+title: "User endpoints — auth, profile, and account"
+description: "Sign up, sign in, manage your profile, change or reset your password, and delete your account. JWT auth is delivered via an HTTP-only cookie after sign-in."
+---
+
+All user state in the LMS Backend revolves around a single `User` document. Authentication is cookie-based: on a successful sign-in or sign-up the server sets an HTTP-only `token` cookie containing a signed JWT. Protected endpoints verify this cookie via the `isAuthenticated` middleware — you do not need to pass `Authorization` headers manually if your HTTP client forwards cookies.
+
+<Info>
+  All endpoints are prefixed with `/api/v1/user`. The base URL for local development is `http://localhost:4000`.
+</Info>
+
+---
+
+## POST /api/v1/user/signup
+
+Create a new user account. The `validateSignUp` middleware runs before the controller and rejects requests that fail field validation.
+
+**Auth required:** No
+
+### Request body
+
+<ParamField body="name" type="string" required>
+  Display name. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Valid email address. Stored in lowercase. Must be unique across all accounts.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Account password. Minimum 8 characters. Stored as a bcrypt hash.
+</ParamField>
+
+<ParamField body="role" type="string" default="student">
+  Account role. Accepted values: `student`, `instructor`, `admin`. Defaults to `student`.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` on successful account creation.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable confirmation message.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  The newly created user object. Does not include `password`.
+
+  <Expandable title="user fields">
+    <ResponseField name="_id" type="string">MongoDB document ID.</ResponseField>
+    <ResponseField name="name" type="string">Display name.</ResponseField>
+    <ResponseField name="email" type="string">Lowercase email address.</ResponseField>
+    <ResponseField name="role" type="string">`student`, `instructor`, or `admin`.</ResponseField>
+    <ResponseField name="avatar" type="string">URL or filename of the profile avatar. Default: `"default-avatar.png"`.</ResponseField>
+    <ResponseField name="bio" type="string">Optional biography text.</ResponseField>
+    <ResponseField name="enrolledCourses" type="array">List of enrolled course references with `enrolledAt` timestamps.</ResponseField>
+    <ResponseField name="createdCourses" type="array">List of course IDs created by the user (instructors).</ResponseField>
+    <ResponseField name="lastActive" type="string">ISO 8601 datetime of last activity.</ResponseField>
+    <ResponseField name="totalEnrolledCourses" type="number">Virtual field — count of enrolled courses.</ResponseField>
+    <ResponseField name="createdAt" type="string">ISO 8601 document creation timestamp.</ResponseField>
+    <ResponseField name="updatedAt" type="string">ISO 8601 last-update timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="token" type="string">
+  The signed JWT. Also delivered as the `token` HTTP-only cookie. You do not need to store this manually if your client handles cookies automatically.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:4000/api/v1/user/signup \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "password": "securepass123"
+  }'
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Validation failed (missing or malformed fields) |
+| `400` | A user with that email already exists |
+
+---
+
+## POST /api/v1/user/signin
+
+Authenticate an existing user. On success, sets an HTTP-only `token` cookie that must be included in all subsequent protected requests.
+
+**Auth required:** No
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  Registered email address.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Account password in plain text. Compared against the stored bcrypt hash.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` on successful authentication.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Welcome message including the user's name.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  The authenticated user object (same shape as signup response — does not include `password`).
+</ResponseField>
+
+<ResponseField name="token" type="string">
+  The signed JWT. Also delivered as the `token` HTTP-only cookie.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:4000/api/v1/user/signin \
+  --header 'Content-Type: application/json' \
+  --cookie-jar cookies.txt \
+  --data '{
+    "email": "ada@example.com",
+    "password": "securepass123"
+  }'
+```
+
+</CodeGroup>
+
+<Note>
+  Use `--cookie-jar cookies.txt` with cURL to persist the `token` cookie. Subsequent requests can then use `--cookie cookies.txt` to send it automatically.
+</Note>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `401` | Invalid email or password |
+
+---
+
+## POST /api/v1/user/signout
+
+Clear the `token` cookie to end the current session.
+
+**Auth required:** No (cookie is cleared regardless of its validity)
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Signed out successfully"
+}
+```
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:4000/api/v1/user/signout \
+  --cookie cookies.txt
+```
+
+</CodeGroup>
+
+---
+
+## GET /api/v1/user/profile
+
+Retrieve the authenticated user's full profile. The `enrolledCourses` array is populated with `title`, `thumbnail`, and `description` from each linked course.
+
+**Auth required:** Yes
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  The user document with enrolled courses populated and the virtual `totalEnrolledCourses` count appended.
+
+  <Expandable title="user fields">
+    <ResponseField name="_id" type="string">MongoDB document ID.</ResponseField>
+    <ResponseField name="name" type="string">Display name.</ResponseField>
+    <ResponseField name="email" type="string">Email address.</ResponseField>
+    <ResponseField name="role" type="string">Account role.</ResponseField>
+    <ResponseField name="avatar" type="string">Avatar URL or filename.</ResponseField>
+    <ResponseField name="bio" type="string">Biography text.</ResponseField>
+    <ResponseField name="enrolledCourses" type="array">
+      Array of enrollment objects.
+      <Expandable title="enrollment object">
+        <ResponseField name="course" type="object">Populated course with `_id`, `title`, `thumbnail`, and `description`.</ResponseField>
+        <ResponseField name="enrolledAt" type="string">ISO 8601 enrollment timestamp.</ResponseField>
+      </Expandable>
+    </ResponseField>
+    <ResponseField name="totalEnrolledCourses" type="number">Count of all enrolled courses.</ResponseField>
+    <ResponseField name="lastActive" type="string">ISO 8601 last-activity datetime.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request GET \
+  --url http://localhost:4000/api/v1/user/profile \
+  --cookie cookies.txt
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `401` | Missing or invalid auth cookie |
+| `404` | Authenticated user not found in database |
+
+---
+
+## PATCH /api/v1/user/profile
+
+Update the authenticated user's profile. Send as `multipart/form-data` if you are uploading a new avatar image; otherwise `application/json` is accepted for text-only fields.
+
+**Auth required:** Yes
+
+### Request — multipart/form-data
+
+<ParamField body="name" type="string">
+  Updated display name.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Updated email address. Stored lowercase.
+</ParamField>
+
+<ParamField body="bio" type="string">
+  Biography text. Maximum 200 characters.
+</ParamField>
+
+<ParamField body="avatar" type="file">
+  New avatar image file. When provided, the old avatar is deleted from Cloudinary and replaced with the newly uploaded image. The field name must be `avatar`.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` on success.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Profile updated successfully."`
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  The updated user document.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL — with avatar upload
+curl --request PATCH \
+  --url http://localhost:4000/api/v1/user/profile \
+  --cookie cookies.txt \
+  --form 'name=Ada Lovelace' \
+  --form 'bio=Mathematician and writer' \
+  --form 'avatar=@/path/to/photo.jpg'
+```
+
+```bash cURL — text fields only
+curl --request PATCH \
+  --url http://localhost:4000/api/v1/user/profile \
+  --cookie cookies.txt \
+  --header 'Content-Type: application/json' \
+  --data '{"bio": "Mathematician and writer"}'
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `401` | Missing or invalid auth cookie |
+| `404` | Authenticated user not found |
+
+---
+
+## PATCH /api/v1/user/password
+
+Change the password for the authenticated account.
+
+**Auth required:** Yes
+
+### Request body
+
+<ParamField body="newPassword" type="string" required>
+  The replacement password. Minimum 8 characters. Saved as a new bcrypt hash.
+</ParamField>
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Password changed successfully."
+}
+```
+
+<CodeGroup>
+
+```bash cURL
+curl --request PATCH \
+  --url http://localhost:4000/api/v1/user/password \
+  --cookie cookies.txt \
+  --header 'Content-Type: application/json' \
+  --data '{"newPassword": "newSecurePass456"}'
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | `newPassword` is missing from the request body |
+| `401` | Missing or invalid auth cookie |
+| `404` | User not found |
+
+---
+
+## POST /api/v1/user/forgot-password
+
+Generate a short-lived password reset token for the given email address. In the current implementation the raw token is returned directly in the response body — in production you would email it to the user instead.
+
+**Auth required:** No
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address associated with the account that needs a password reset.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` when a token is generated.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Password reset token generated successfully"`
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  <Expandable title="data properties">
+    <ResponseField name="token" type="string">
+      The raw (unhashed) reset token. Valid for 10 minutes. Pass this value in the URL of the reset-password endpoint.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:4000/api/v1/user/forgot-password \
+  --header 'Content-Type: application/json' \
+  --data '{"email": "ada@example.com"}'
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Email field is missing |
+| `404` | No account found for that email |
+
+---
+
+## POST /api/v1/user/reset-password/:token
+
+Reset the account password using a valid token obtained from the forgot-password endpoint. The token is valid for **10 minutes** from the time it was generated.
+
+**Auth required:** No
+
+### Path parameters
+
+<ParamField path="token" type="string" required>
+  The raw reset token returned by `POST /api/v1/user/forgot-password`.
+</ParamField>
+
+### Request body
+
+<ParamField body="newPassword" type="string" required>
+  The new password. Minimum 8 characters.
+</ParamField>
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Password reset successfully. You can now log in with your new password."
+}
+```
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url http://localhost:4000/api/v1/user/reset-password/YOUR_RESET_TOKEN \
+  --header 'Content-Type: application/json' \
+  --data '{"newPassword": "freshNewPass789"}'
+```
+
+</CodeGroup>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `400` | Token is missing from path |
+| `400` | `newPassword` is missing |
+| `400` | Token is invalid or has expired (older than 10 minutes) |
+
+---
+
+## DELETE /api/v1/user/account
+
+Permanently delete the authenticated user's account. If the user has a custom avatar stored in Cloudinary, it is also deleted. The operation is irreversible.
+
+**Auth required:** Yes
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` on successful deletion.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"User account deleted successfully"`
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  The deleted user document as it existed before removal.
+</ResponseField>
+
+<CodeGroup>
+
+```bash cURL
+curl --request DELETE \
+  --url http://localhost:4000/api/v1/user/account \
+  --cookie cookies.txt
+```
+
+</CodeGroup>
+
+<Warning>
+  Account deletion is permanent. All user data is removed from the database and any associated Cloudinary avatar is deleted. There is no recovery path.
+</Warning>
+
+### Errors
+
+| Status | Condition |
+|--------|-----------|
+| `401` | Missing or invalid auth cookie |
+| `404` | User not found |

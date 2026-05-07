@@ -1,0 +1,130 @@
+---
+title: "Configure your environment variables"
+description: "Set up the .env file for the LMS Backend, covering database connection, JWT auth, Cloudinary media storage, and Stripe and Razorpay payment gateway credentials."
+---
+
+The LMS Backend reads all runtime configuration from a `.env` file in the project root. The server will not start without a valid MongoDB URI, and payment and media features will fail silently if their respective keys are missing. Create the file before running `npm run dev`.
+
+## Full .env template
+
+Copy this template into a file named `.env` at the project root and fill in every value:
+
+```bash .env
+# Server
+PORT=4000
+NODE_ENV=development
+CLIENT_URL=http://localhost:5173
+
+# Database
+MONGO_URI=mongodb://localhost:27017/lms
+
+# Authentication
+SECRET_KEY=your-jwt-secret-at-least-32-chars
+
+# Cloudinary (media uploads)
+CLOUD_NAME=your-cloudinary-cloud-name
+API_KEY=your-cloudinary-api-key
+API_SECRET=your-cloudinary-api-secret
+
+# Stripe
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+
+# Razorpay
+RAZORPAY_KEY_ID=rzp_test_...
+RAZORPAY_KEY_SECRET=your-razorpay-key-secret
+```
+
+<Warning>
+  Never commit `.env` to version control. The repository's `.gitignore` excludes it, but confirm this before your first push.
+</Warning>
+
+## Variable reference
+
+### Server
+
+<ParamField path="PORT" type="number" required>
+  The port the Express server listens on. The README and all curl examples in this documentation use `4000`. Must match the port you target in your frontend's API base URL.
+</ParamField>
+
+<ParamField path="NODE_ENV" type="string" required>
+  Runtime environment. Set to `development` to enable Morgan HTTP request logging and Mongoose query debugging. Set to `production` to disable both and suppress stack traces from error responses.
+</ParamField>
+
+<ParamField path="CLIENT_URL" type="string" required>
+  The origin of your frontend application, used to configure CORS. The server allows credentials (cookies) only from this origin. Defaults to `http://localhost:5173` if not set. Update this to your deployed frontend URL in production.
+</ParamField>
+
+### Database
+
+<ParamField path="MONGO_URI" type="string" required>
+  The full MongoDB connection string. Use `mongodb://localhost:27017/lms` for a local instance or a MongoDB Atlas connection string for a hosted cluster. The database layer retries the connection up to three times on failure before exiting.
+</ParamField>
+
+<Note>
+  The README documents this variable as `DATABASE_URL`, but the actual code in `databases/db.js` reads `process.env.MONGO_URI`. Use `MONGO_URI` in your `.env` file.
+</Note>
+
+### Authentication
+
+<ParamField path="SECRET_KEY" type="string" required>
+  The secret used to sign and verify JWT tokens. Read by `auth.middleware.js` via `jwt.verify(token, process.env.SECRET_KEY)`. Use a random string of at least 32 characters. Any change to this value invalidates all existing sessions immediately.
+</ParamField>
+
+### Cloudinary (media uploads)
+
+Course thumbnails and lecture videos are uploaded to Cloudinary. All three variables are required for the upload and delete functionality used by the course and user profile endpoints.
+
+<ParamField path="CLOUD_NAME" type="string">
+  Your Cloudinary cloud name, visible in the Cloudinary dashboard under **Settings → Account**.
+</ParamField>
+
+<ParamField path="API_KEY" type="string">
+  Your Cloudinary API key. Found alongside the cloud name in the Cloudinary dashboard.
+</ParamField>
+
+<ParamField path="API_SECRET" type="string">
+  Your Cloudinary API secret. Treat this like a password — it authorizes server-side upload and delete operations.
+</ParamField>
+
+<Tip>
+  If you are not testing media uploads, you can leave the Cloudinary variables empty to start the server. Endpoints that call `uploadMedia` will log an error but the server itself will not crash.
+</Tip>
+
+### Stripe
+
+<ParamField path="STRIPE_SECRET_KEY" type="string">
+  Your Stripe secret API key. Used server-side to create Checkout sessions. Use a `sk_test_...` key during development and a `sk_live_...` key in production. Never expose this key to the client.
+</ParamField>
+
+<ParamField path="STRIPE_WEBHOOK_SECRET" type="string">
+  The signing secret for your Stripe webhook endpoint. Stripe signs every event payload it sends to `POST /api/v1/payments/webhook`. The server uses this secret to verify the signature and reject spoofed requests.
+
+  To get this value during local development, use the Stripe CLI:
+
+  ```bash
+  stripe listen --forward-to localhost:4000/api/v1/payments/webhook
+  ```
+
+  The CLI prints the webhook signing secret (`whsec_...`) when it starts. Copy it into your `.env`.
+</ParamField>
+
+<Warning>
+  The webhook route at `POST /api/v1/payments/webhook` requires the raw request body. The server is already configured to parse this route with `express.raw({ type: "application/json" })` before the standard JSON body parser runs. Do not add any body-parsing middleware before this route.
+</Warning>
+
+### Razorpay
+
+<ParamField path="RAZORPAY_KEY_ID" type="string">
+  Your Razorpay key ID. Used to authenticate Razorpay API requests. Begins with `rzp_test_` in test mode and `rzp_live_` in production.
+</ParamField>
+
+<ParamField path="RAZORPAY_KEY_SECRET" type="string">
+  Your Razorpay key secret. Used together with the key ID to authenticate server-side Razorpay calls. Treat this with the same care as your Stripe secret key.
+</ParamField>
+
+## Security notes
+
+- Set `NODE_ENV=production` on any internet-facing deployment. This suppresses stack traces from the global error handler, which prevents internal file paths and error details from leaking to clients.
+- Generate `SECRET_KEY` with a cryptographically secure random generator, for example: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+- The global rate limiter allows 100 requests per IP per 15-minute window on all `/api` routes. Adjust `windowMs` and `limit` in `index.js` if your use case requires different thresholds.

@@ -1,0 +1,106 @@
+{
+  "projectType": "api-service",
+  "projectName": "LMS Backend",
+  "projectDescription": "A secure, modular Node.js/Express REST API backend for a Learning Management System with user auth, course management, lecture uploads, progress tracking, and Stripe/Razorpay payment integration.",
+  "theme": "luma",
+  "primaryColor": "#4F46E5",
+  "lightColor": "#EEF2FF",
+  "darkColor": "#3730A3",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "environment-setup"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/authentication",
+              "concepts/roles-permissions",
+              "concepts/media-uploads",
+              "concepts/security"
+            ]
+          },
+          {
+            "group": "Payments",
+            "pages": [
+              "payments/stripe",
+              "payments/razorpay"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/errors"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/health",
+              "api/users",
+              "api/courses",
+              "api/lectures",
+              "api/progress",
+              "api/payments"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "JWT-based authentication with cookie sessions",
+    "Role-based access control (student, instructor, admin)",
+    "Course creation and management with Cloudinary media uploads",
+    "Lecture video uploads via Multer and Cloudinary",
+    "Student progress tracking per course and lecture",
+    "Stripe Checkout and webhook-based payment processing",
+    "Razorpay payment gateway integration",
+    "Security hardening with Helmet, HPP, rate limiting, and Mongo sanitization",
+    "Password reset via hashed token with expiry",
+    "Global error handling and async error wrapper"
+  ],
+  "publicApiSurface": [
+    "POST /api/v1/user/signup",
+    "POST /api/v1/user/signin",
+    "POST /api/v1/user/signout",
+    "GET /api/v1/user/profile",
+    "PATCH /api/v1/user/profile",
+    "PATCH /api/v1/user/password",
+    "POST /api/v1/user/forgot-password",
+    "POST /api/v1/user/reset-password/:token",
+    "DELETE /api/v1/user/account",
+    "POST /api/v1/courses",
+    "GET /api/v1/courses/search",
+    "GET /api/v1/courses/published",
+    "GET /api/v1/courses/my-courses",
+    "GET /api/v1/courses/:courseId",
+    "PATCH /api/v1/courses/:courseId",
+    "POST /api/v1/courses/:courseId/lectures",
+    "GET /api/v1/courses/:courseId/lectures",
+    "GET /api/v1/progress/:courseId",
+    "PATCH /api/v1/progress/:courseId/lectures/:lectureId",
+    "POST /api/v1/progress/:courseId/complete",
+    "POST /api/v1/progress/:courseId/reset",
+    "POST /api/v1/payments/create-checkout-session",
+    "POST /api/v1/payments/webhook",
+    "GET /api/v1/payments/courses/:courseId/purchase-status",
+    "GET /api/v1/payments/purchased-courses",
+    "GET /api/v1/healthcheck"
+  ]
+}

@@ -1,0 +1,70 @@
+---
+title: "LMS Backend: Modular REST API for Learning Platforms"
+description: "Secure Node.js/Express API for LMS apps: user auth, course management, lecture uploads, progress tracking, and dual Stripe/Razorpay payment integration."
+---
+
+The LMS Backend is a modular REST API built with Node.js, Express 5, and MongoDB. It handles every server-side concern a learning management system needs: user registration and JWT authentication, course and lecture management with Cloudinary-backed media uploads, per-student progress tracking, and integrated payment processing through both Stripe and Razorpay. All API routes are served under the `/api/v1` prefix and communicate via JSON.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="JWT cookie authentication" icon="lock">
+    Stateless auth using signed JWT tokens stored in HTTP-only cookies. Protected routes verify tokens via the `isAuthenticated` middleware before any handler runs.
+  </Card>
+  <Card title="Course and lecture management" icon="book">
+    Instructors can create courses, upload thumbnail images, add video lectures, and publish or unpublish content. Students browse published courses and search by keyword.
+  </Card>
+  <Card title="Student progress tracking" icon="chart-line">
+    The progress API tracks completion per lecture, allows students to mark a full course complete, and supports resetting progress to start over.
+  </Card>
+  <Card title="Stripe and Razorpay payments" icon="credit-card">
+    Supports Stripe Checkout sessions with webhook verification for asynchronous payment confirmation, plus Razorpay for regional payment processing.
+  </Card>
+  <Card title="Cloudinary media uploads" icon="video">
+    Course thumbnails and lecture videos are uploaded to Cloudinary via Multer. The API stores the resulting public IDs and URLs, so your frontend can stream video directly.
+  </Card>
+  <Card title="Security middleware stack" icon="shield">
+    Every request passes through Helmet (security headers), HPP (HTTP parameter pollution prevention), Mongo sanitization, and a global rate limiter of 100 requests per 15 minutes per IP.
+  </Card>
+</CardGroup>
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Runtime | Node.js (ESM modules) |
+| Framework | Express 5 |
+| Database | MongoDB via Mongoose 8 |
+| Authentication | jsonwebtoken + bcryptjs |
+| Payments | Stripe 18, Razorpay 2 |
+| Media storage | Cloudinary 2 |
+| File uploads | Multer 2 |
+| Validation | express-validator 7 |
+| Security | Helmet, express-rate-limit, HPP, mongo-sanitize |
+
+## API surface
+
+The server exposes five route groups, all prefixed with `/api/v1`:
+
+| Route prefix | Resource |
+|---|---|
+| `/api/v1/healthcheck` | Server and database health status |
+| `/api/v1/user` | Registration, authentication, profile, and password management |
+| `/api/v1/courses` | Course creation, search, lecture management |
+| `/api/v1/progress` | Per-student lecture and course completion tracking |
+| `/api/v1/payments` | Stripe checkout, webhook ingestion, purchase history |
+
+<Note>
+  All routes that modify or read user-specific data require a valid session cookie. See [Authentication](/concepts/authentication) for how the cookie-based JWT flow works.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, configure your environment, and make your first API call in minutes.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Browse every endpoint with request/response schemas and curl examples.
+  </Card>
+</CardGroup>
